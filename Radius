@@ -1,0 +1,226 @@
+#!/bin/sh
+#
+# Resource script for freeradius daemon
+#
+# Description:  Manages freeradius daemon as an OCF resource in
+#               an High Availability setup.
+#
+# Radius OCF script's Author: g.kurkowiak
+#
+#	usage: $0 {start|stop|status|monitor|validate-all|meta-data}
+#
+#	The "start" arg starts freeradius.
+#
+#	The "stop" arg stops it.
+#
+# OCF parameters:
+# OCF_RESKEY_binarypath
+# OCF_RESKEY_confdirectory
+
+#######################################################################
+# Initialization:
+
+: ${OCF_FUNCTIONS_DIR=${OCF_ROOT}/lib/heartbeat}
+. ${OCF_FUNCTIONS_DIR}/ocf-shellfuncs
+USAGE="Usage: $0 {start|stop|status|monitor|validate-all|meta-data}";
+
+
+#######################################################################
+
+meta_data()
+{
+cat <<END
+<?xml version="1.0"?>
+<!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
+<resource-agent name="Radius">
+<version>1.0</version>
+<longdesc lang="en">
+This script manages Radius daemon
+</longdesc>
+<shortdesc lang="en">Manages an Radius daemon</shortdesc>
+<parameters>
+<parameter name="binarypath">
+<longdesc lang="en">
+The radius binary path.
+For example, "/usr/sbin/radiusd"
+</longdesc>
+<shortdesc lang="en">Full path to the Radius binary</shortdesc>
+<content type="string" default="/usr/sbin/radiusd"/>
+</parameter>
+<parameter name="confdirectory">
+<longdesc lang="en">
+The Radius daemon directory with full path.
+For example, "/etc/raddb/"
+</longdesc>
+<shortdesc lang="en">Configuration file name with full path</shortdesc>
+<content type="string" default="/etc/raddb/" />
+</parameter>
+</parameters>
+<actions>
+<action name="start" timeout="20s"/>
+<action name="stop" timeout="20s"/>
+<action name="monitor" depth="0" timeout="20s" interval="60s" />
+<action name="validate-all" timeout="20s"/>
+<action name="meta-data"  timeout="5s"/>
+</actions>
+</resource-agent>
+END
+exit $OCF_SUCCESS
+}
+#######################################################################
+
+usage()
+{
+	echo $USAGE >&2
+}
+
+
+get_pid_and_conf_file()
+{
+	if [ -n "$OCF_RESKEY_confdirectory" ]; then
+		CONF_FILE=$OCF_RESKEY_confdirectory
+	else
+		CONF_FILE="/etc/raddb/"
+	fi
+
+	PIDFILE="/var/run/radiusd/radiusd.pid"
+	if [ "${PIDFILE}" = '' ]; then
+		PIDFILE="/var/run/${OCF_RESOURCE_INSTANCE}.pid"
+	fi
+}
+
+radius_status()
+{
+	if [ -n "$PIDFILE" -a -f "$PIDFILE" ]; then
+		PID=`cat $PIDFILE`
+		if [ -n "$PID" ]; then
+			if ps -p $PID | grep radius >/dev/null ; then
+				ocf_log info "radius daemon running"
+				return $OCF_SUCCESS
+			else
+				ocf_log info "radiusy daemon is not running but pid file exists"
+				return $OCF_NOT_RUNNING
+			fi
+		else
+			ocf_log err "PID file empty!"
+			return $OCF_ERR_GENERIC
+		fi
+	fi
+
+	ocf_log info "radius daemon is not running"
+	return $OCF_NOT_RUNNING
+}
+
+radius_start()
+{
+	radius_status
+	retVal=$?
+	if [ $retVal -eq $OCF_SUCCESS ]; then
+		exit $OCF_SUCCESS
+	elif [ $retVal -ne $OCF_NOT_RUNNING ]; then
+		ocf_log err "Error. Unknown status."
+		exit $OCF_ERR_GENERIC
+	fi
+
+	if [ -n "$OCF_RESKEY_binpath" ]; then
+		COMMAND="$OCF_RESKEY_binpath"
+	else
+		COMMAND="/usr/sbin/radiusd"
+	fi
+
+	$COMMAND -d $CONF_FILE;
+	if [ $? -ne 0 ]; then
+		ocf_log err "Error. radius daemon returned error $?."
+		exit $OCF_ERR_GENERIC
+	fi
+
+	ocf_log info "Started radius daemon."
+	exit $OCF_SUCCESS
+}
+
+radius_stop()
+{
+	if radius_status ; then
+		PID=`cat $PIDFILE`
+		if [ -n "$PID" ] ; then
+			kill $PID
+			if [ $? -ne 0 ]; then
+				kill -SIGKILL $PID
+				if [ $? -ne 0 ]; then
+					ocf_log err "Error. Could not stop radius daemon."
+					return $OCF_ERR_GENERIC
+				fi
+			fi
+			rm $PIDFILE 2>/dev/null
+		fi
+	fi
+	ocf_log info "Stopped radius daemon."
+	exit $OCF_SUCCESS
+}
+
+radius_monitor()
+{
+	radius_status
+}
+
+radius_validate_all()
+{
+	if [ -n "$OCF_RESKEY_binarypath" -a ! -x "$OCF_RESKEY_binarypath" ]; then
+		ocf_log err "Binary path $OCF_RESKEY_binarypath does not exist."
+		exit $OCF_ERR_ARGS
+	fi
+	if [ -n "$OCF_RESKEY_conffile" -a ! -f "$OCF_RESKEY_conffile" ]; then
+		ocf_log err "Config file $OCF_RESKEY_conffile does not exist."
+		exit $OCF_ERR_ARGS
+	fi
+
+	if  grep -v "^#" "$CONF_FILE/radiusd.conf" | grep "pidfile" > /dev/null ; then
+		:
+	else
+		ocf_log err "Error. \"pidfile\" entry required in the radius config file by radius OCF RA."
+		return $OCF_ERR_GENERIC
+	fi
+
+	return $OCF_SUCCESS
+}
+
+
+if [ $# -ne 1 ]; then
+	usage
+	exit $OCF_ERR_ARGS
+fi
+
+case $1 in
+	start)	get_pid_and_conf_file
+		radius_start
+		;;
+
+	stop)	get_pid_and_conf_file
+		radius_stop
+		;;
+
+	status)	get_pid_and_conf_file
+		radius_status
+		;;
+
+	monitor)get_pid_and_conf_file
+		radius_monitor
+		;;
+
+	validate-all)	get_pid_and_conf_file
+			radius_validate_all
+			;;
+
+	meta-data)	meta_data
+			;;
+
+	usage)	usage
+		exit $OCF_SUCCESS
+		;;
+
+	*)	usage
+		exit $OCF_ERR_UNIMPLEMENTED
+		;;
+esac
+
+
