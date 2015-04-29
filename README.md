@@ -20,8 +20,8 @@ bash -x /usr/lib/ocf/resource.d/heartbeat/Radius validate-all
 crm configure primitive radius ocf:heartbeat:Radius op monitor interval="30 
 </pre>
 
-###### Tested 
+###### Working on 
 
-This script was tested on Centos 6.5 
+Centos 6.5 
 
 
